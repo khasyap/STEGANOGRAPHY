@@ -1,74 +1,123 @@
-# import the liabraries
-import cv2
-import os
-import hashlib
+import argparse
 
-# Specify the path to the input image
-image_path = r"C:\Users\hp\OneDrive\Desktop\New folder (2)\flower.jpeg"
+from PIL import Image
 
-# Read the input image wr have to set the variable 
-img = cv2.imread(image_path)
 
-# Check if the image is successfully loaded
-if img is None:
-    print("Image not found. Check the file path and make sure the image exists.")
-    exit()
+class Steganography:
 
-# Get the dimensions of the image
-height, width, channels = img.shape
+    BLACK_PIXEL = (0, 0, 0)
 
-# Prompt the user to input the secret message
-msg = input("Enter secret message: ")
+    def _int_to_bin(self, rgb):
+        """Convert an integer tuple to a binary (string) tuple.
 
-# Prompt the user to input the password
-password = input("Enter a passcode: ")
+        :param rgb: An integer tuple like (220, 110, 96)
+        :return: A string tuple like ("00101010", "11101011", "00010110")
+        """
+        r, g, b = rgb
+        return f'{r:08b}', f'{g:08b}', f'{b:08b}'
 
-# Hash the password using SHA-256
-hash_object = hashlib.sha256(password.encode())
-hashed_password = hash_object.digest()
+    def _bin_to_int(self, rgb):
+        """Convert a binary (string) tuple to an integer tuple.
 
-# Initialize dictionaries for mapping characters to their ASCII values and vice versa
-d = {}
-c = {}
+        :param rgb: A string tuple like ("00101010", "11101011", "00010110")
+        :return: Return an int tuple like (220, 110, 96)
+        """
+        r, g, b = rgb
+        return int(r, 2), int(g, 2), int(b, 2)
 
-# Fill the dictionaries with ASCII values (0-255)
-for i in range(256):
-    d[chr(i)] = i  # Character to ASCII
-    c[i] = chr(i)  # ASCII to character
+    def _merge_rgb(self, rgb1, rgb2):
+        """Merge two RGB tuples.
 
-# Initialize variables for image coordinates and color channel
-n = 0  # Row index
-m = 0  # Column index
-z = 0  # Color channel index
+        :param rgb1: An integer tuple like (220, 110, 96)
+        :param rgb2: An integer tuple like (240, 95, 105)
+        :return: An integer tuple with the two RGB values merged.
+        """
+        r1, g1, b1 = self._int_to_bin(rgb1)
+        r2, g2, b2 = self._int_to_bin(rgb2)
+        rgb = r1[:4] + r2[:4], g1[:4] + g2[:4], b1[:4] + b2[:4]
+        return self._bin_to_int(rgb)
 
-# Encode the secret message into the image using the hashed password
-for i in range(len(msg)):
-    # Ensure the calculation stays within the 0-255 range
-    new_value = (int(img[n, m, z]) + d[msg[i]] + hashed_password[i % len(hashed_password)]) % 256
-    img[n, m, z] = new_value
-    
-    # Move to the next pixel
-    m += 1
-    
-    # If the column index exceeds the image width, reset it and move to the next row
-    if m >= width:
-        m = 0
-        n += 1
-    
-    # If the row index exceeds the image height, stop encoding (message too large for image)
-    if n >= height:
-        print("Image too small to hold the entire message.")
-        break
-    
-    # Cycle through the color channels (0, 1, 2) for RGB
-    z = (z + 1) % 3
+    def _unmerge_rgb(self, rgb):
+        """Unmerge RGB.
 
-# Save the modified image to a new file
-encrypted_image_path = os.path.join(os.path.dirname(image_path), "encryptedImage.jpg")
-cv2.imwrite(encrypted_image_path, img)
+        :param rgb: An integer tuple like (220, 110, 96)
+        :return: An integer tuple with the two RGB values merged.
+        """
+        r, g, b = self._int_to_bin(rgb)
+        # Extract the last 4 bits (corresponding to the hidden image)
+        # Concatenate 4 zero bits because we are working with 8 bit
+        new_rgb = r[4:] + '0000', g[4:] + '0000', b[4:] + '0000'
+        return self._bin_to_int(new_rgb)
 
-# Open the newly saved encrypted image
-os.startfile(encrypted_image_path)
+    def merge(self, image1, image2):
+        """Merge image2 into image1.
 
-print(f"Message has been encoded into '{encrypted_image_path}'.")
+        :param image1: First image
+        :param image2: Second image
+        :return: A new merged image.
+        """
+        # Check the images dimensions
+        if image2.size[0] > image1.size[0] or image2.size[1] > image1.size[1]:
+            raise ValueError('Image 2 should be smaller than Image 1!')
 
+        # Get the pixel map of the two images
+        map1 = image1.load()
+        map2 = image2.load()
+
+        new_image = Image.new(image1.mode, image1.size)
+        new_map = new_image.load()
+
+        for i in range(image1.size[0]):
+            for j in range(image1.size[1]):
+                is_valid = lambda: i < image2.size[0] and j < image2.size[1]
+                rgb1 = map1[i ,j]
+                rgb2 = map2[i, j] if is_valid() else self.BLACK_PIXEL
+                new_map[i, j] = self._merge_rgb(rgb1, rgb2)
+
+        return new_image
+
+    def unmerge(self, image):
+        """Unmerge an image.
+
+        :param image: The input image.
+        :return: The unmerged/extracted image.
+        """
+        pixel_map = image.load()
+
+        # Create the new image and load the pixel map
+        new_image = Image.new(image.mode, image.size)
+        new_map = new_image.load()
+
+        for i in range(image.size[0]):
+            for j in range(image.size[1]):
+                new_map[i, j] = self._unmerge_rgb(pixel_map[i, j])
+
+        return new_image
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Steganography')
+    subparser = parser.add_subparsers(dest='command')
+
+    merge = subparser.add_parser('merge')
+    merge.add_argument('--image1', required=True, help='Image1 path')
+    merge.add_argument('--image2', required=True, help='Image2 path')
+    merge.add_argument('--output', required=True, help='Output path')
+
+    unmerge = subparser.add_parser('unmerge')
+    unmerge.add_argument('--image', required=True, help='Image path')
+    unmerge.add_argument('--output', required=True, help='Output path')
+
+    args = parser.parse_args()
+
+    if args.command == 'merge':
+        image1 = Image.open(args.image1)
+        image2 = Image.open(args.image2)
+        Steganography().merge(image1, image2).save(args.output)
+    elif args.command == 'unmerge':
+        image = Image.open(args.image)
+        Steganography().unmerge(image).save(args.output)
+
+
+if __name__ == '__main__':
+    main()
